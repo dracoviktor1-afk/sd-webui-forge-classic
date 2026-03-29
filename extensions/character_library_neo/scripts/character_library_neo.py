@@ -179,16 +179,21 @@ def _normalize_char_id(char_id):
         return None
 
 def _char_dir(char_id: str) -> str:
+    """
+    Resolve the filesystem folder path for a character by looking up the stored folder_name.
+    Falls back to CHAR_ROOT/<char_id> if not found (backwards compatibility).
+    """
     cid = _normalize_char_id(char_id)
     if not cid:
-        # return root characters directory for non-selected id (caller should check for None)
         return CHAR_ROOT
+    c = next((cc for cc in _list_characters() if cc.id == cid), None)
+    if c and getattr(c, "folder_name", None):
+        return os.path.join(CHAR_ROOT, c.folder_name)
+    # fallback: use id-only folder (legacy)
     return os.path.join(CHAR_ROOT, str(cid))
 
 def _refs_dir(char_id: str) -> str:
     cid = _normalize_char_id(char_id)
-    if not cid:
-        return os.path.join(CHAR_ROOT, "no_char_selected_refs")
     return os.path.join(_char_dir(cid), "refs")
 
 def _ref_abs_path(char_id: str, ref_rel: str) -> str:
