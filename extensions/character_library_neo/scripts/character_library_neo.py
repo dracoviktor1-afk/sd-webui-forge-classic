@@ -639,39 +639,38 @@ class CharacterBindingScript(scripts_mod.Script):
         except Exception as e:
             print(f"[character_library_neo] failed to attach character refs: {e}")
 
-# Register the script class in a backwards-compatible way.
-# Different forks / versions of the webui use different registration APIs,
-# so try a few options.
+# Backwards-compatible registration for CharacterBindingScript
+from types import SimpleNamespace
+
 _registered = False
 
-# Common: older forks use scripts_list
-if hasattr(scripts_mod, "scripts_list"):
-    try:
-        scripts_mod.scripts_list.append(CharacterBindingScript())
-        _registered = True
-    except Exception as e:
-        print(f"[character_library_neo] failed to append to scripts_list: {e}")
+# Descriptor expected by modules.scripts.initialize_scripts:
+descriptor = SimpleNamespace(module=__name__, script_class=CharacterBindingScript)
 
-# Some forks expose scripts_data instead
-if not _registered and hasattr(scripts_mod, "scripts_data"):
+# Preferred: append to scripts_data if present (your fork uses this)
+if hasattr(scripts_mod, "scripts_data") and isinstance(scripts_mod.scripts_data, list):
     try:
-        scripts_mod.scripts_data.append(CharacterBindingScript())
+        scripts_mod.scripts_data.append(descriptor)
         _registered = True
+        print("[character_library_neo] registered script descriptor in scripts_data")
     except Exception as e:
         print(f"[character_library_neo] failed to append to scripts_data: {e}")
 
-# Some implementations provide a register function
-if not _registered and hasattr(scripts_mod, "register_script"):
+# Fallback: some forks expect classes in scripts_list
+if not _registered and hasattr(scripts_mod, "scripts_list") and isinstance(scripts_mod.scripts_list, list):
     try:
-        scripts_mod.register_script(CharacterBindingScript())
+        # append the class, not an instance
+        scripts_mod.scripts_list.append(CharacterBindingScript)
+        _registered = True
+        print("[character_library_neo] appended CharacterBindingScript class to scripts_list")
+    except Exception as e:
+        print(f"[character_library_neo] failed to append to scripts_list: {e}")
+
+# Last-resort fallback: attach descriptor to module so loader can find it manually
+if not _registered:
+    try:
+        setattr(scripts_mod, "character_library_neo_fallback", descriptor)
+        print("[character_library_neo] installed fallback descriptor on modules.scripts as 'character_library_neo_fallback'")
         _registered = True
     except Exception as e:
-        print(f"[character_library_neo] failed to register_script: {e}")
-
-if not _registered:
-    # Last-resort: attach to module for visibility and warn
-    try:
-        setattr(scripts_mod, "character_library_neo_fallback_script", CharacterBindingScript())
-        print("[character_library_neo] registered fallback script instance on modules.scripts as 'character_library_neo_fallback_script'")
-    except Exception as e:
-        print(f"[character_library_neo] failed to register CharacterBindingScript by any method: {e}")
+        print(f"[character_library_neo] final fallback registration failed: {e}")
