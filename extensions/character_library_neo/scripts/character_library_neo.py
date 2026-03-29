@@ -112,8 +112,11 @@ def _save_character(updated: Character):
     _write_json(CHAR_INDEX, payload)
 
 def _delete_character(char_id: str):
+    cid = _normalize_char_id(char_id)
+    if not cid:
+        return
     chars = _list_characters()
-    kept = [c for c in chars if c.id != char_id]
+    kept = [c for c in chars if c.id != cid]
     _write_json(
         CHAR_INDEX,
         {
@@ -134,21 +137,40 @@ def _delete_character(char_id: str):
         },
     )
     # remove folder
-    folder = os.path.join(CHAR_ROOT, char_id)
+    folder = os.path.join(CHAR_ROOT, cid)
     if os.path.isdir(folder):
         shutil.rmtree(folder, ignore_errors=True)
 
+# normalize incoming character id from Gradio (it may be a list/tuple or a single string)
+def _normalize_char_id(char_id):
+    if isinstance(char_id, (list, tuple)):
+        return char_id[0] if len(char_id) > 0 else None
+    return char_id
+
 def _char_dir(char_id: str) -> str:
-    return os.path.join(CHAR_ROOT, char_id)
+    cid = _normalize_char_id(char_id)
+    if not cid:
+        # return root characters directory for non-selected id (caller should check for None)
+        return CHAR_ROOT
+    return os.path.join(CHAR_ROOT, str(cid))
 
 def _refs_dir(char_id: str) -> str:
-    return os.path.join(_char_dir(char_id), "refs")
+    cid = _normalize_char_id(char_id)
+    if not cid:
+        return os.path.join(CHAR_ROOT, "no_char_selected_refs")
+    return os.path.join(_char_dir(cid), "refs")
 
 def _ref_abs_path(char_id: str, ref_rel: str) -> str:
-    return os.path.join(_char_dir(char_id), ref_rel).replace("\\", "/")
+    cid = _normalize_char_id(char_id)
+    if not cid or not ref_rel:
+        return ""
+    return os.path.join(_char_dir(cid), ref_rel).replace("\\", "/")
 
 def _list_refs(char_id: str) -> List[str]:
-    rdir = _refs_dir(char_id)
+    cid = _normalize_char_id(char_id)
+    if not cid:
+        return []
+    rdir = _refs_dir(cid)
     if not os.path.isdir(rdir):
         return []
     out = []
@@ -184,12 +206,14 @@ def _create_character(name: str) -> Tuple[str, str]:
     return char_id, f"Created character: {c.name} ({c.id})"
 
 def _add_refs(char_id: str, files: List[Any]) -> str:
-    if not char_id:
+    # allow gradio dropdown to pass list/tuple
+    cid = _normalize_char_id(char_id)
+    if not cid:
         return "Select a character first."
     if not files:
         return "No files provided."
 
-    rdir = _refs_dir(char_id)
+    rdir = _refs_dir(cid)
     _safe_mkdir(rdir)
 
     added = 0
@@ -215,21 +239,24 @@ def _add_refs(char_id: str, files: List[Any]) -> str:
     if added == 0:
         return "No valid images were added."
     chars = {c.id: c for c in _list_characters()}
-    c = chars.get(char_id)
+    c = chars.get(cid)
     if c:
         c.updated_at = _now_iso()
         _save_character(c)
     return f"Added {added} reference image(s)."
 
 def _make_preview(char_id: str) -> Optional[str]:
+    cid = _normalize_char_id(char_id)
+    if not cid:
+        return None
     # Simple preview: pick identity_ref or first style ref and return absolute path.
-    c = next((c for c in _list_characters() if c.id == char_id), None)
+    c = next((c for c in _list_characters() if c.id == cid), None)
     if not c:
         return None
     candidate = c.identity_ref or (c.style_refs[0] if c.style_refs else None)
     if not candidate:
         return None
-    return _ref_abs_path(char_id, candidate)
+    return _ref_abs_path(cid, candidate)
 
 def _ui_refresh_character_list() -> Tuple[List[Tuple[str,str]], str]:
     chars = _list_characters()
@@ -238,7 +265,24 @@ def _ui_refresh_character_list() -> Tuple[List[Tuple[str,str]], str]:
     return choices, msg
 
 def _ui_load_character(char_id: str):
-    c = next((cc for cc in _list_characters() if cc.id == char_id), None)
+    cid = _normalize_char_id(char_id)
+    if not cid:
+        return (
+            [],
+            [],
+            None,
+            [],
+            "",
+            True,
+            True,
+            0.85,
+            0.6,
+            0.0,
+            1.0,
+            None,
+        )
+
+    c = next((cc for cc in _list_characters() if cc.id == cid), None)
     if not c:
         return (
             [],
@@ -255,8 +299,8 @@ def _ui_load_character(char_id: str):
             None,
         )
 
-    refs = _list_refs(char_id)
-    gallery_items = [(_ref_abs_path(char_id, r), os.path.basename(r)) for r in refs]
+    refs = _list_refs(cid)
+    gallery_items = [(_ref_abs_path(cid, r), os.path.basename(r)) for r in refs]
     identity_choices = [(os.path.basename(r), r) for r in refs]
     style_choices = identity_choices
 
@@ -287,11 +331,15 @@ def _ui_save_character(
     start_percent: float,
     end_percent: float,
 ) -> str:
-    c = next((cc for cc in _list_characters() if cc.id == char_id), None)
+    cid = _normalize_char_id(char_id)
+    if not cid:
+        return "No character selected."
+
+    c = next((cc for cc in _list_characters() if cc.id == cid), None)
     if not c:
         return "No character selected."
 
-    refs = set(_list_refs(char_id))
+    refs = set(_list_refs(cid))
     identity_ref = identity_ref if identity_ref in refs else None
     style_refs = [r for r in (style_refs or []) if r in refs]
 
@@ -307,14 +355,15 @@ def _ui_save_character(
         start_percent=float(start_percent),
         end_percent=float(end_percent),
     )
-    c.preview = _make_preview(char_id)
+    c.preview = _make_preview(cid)
     _save_character(c)
     return "Saved."
 
 def _ui_delete_character(char_id: str):
-    if not char_id:
+    cid = _normalize_char_id(char_id)
+    if not cid:
         return [], [], None, "No character selected."
-    _delete_character(char_id)
+    _delete_character(cid)
     choices, msg = _ui_refresh_character_list()
     return choices, msg
 
