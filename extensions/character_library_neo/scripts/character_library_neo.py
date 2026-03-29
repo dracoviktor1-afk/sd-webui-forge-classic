@@ -236,12 +236,21 @@ def _list_refs(char_id: str) -> List[str]:
     return out
 
 def _create_character(name: str) -> Tuple[str, str]:
+    """
+    Create a new Character entry and a single folder named "<Display Name> -- <id>"
+    with a refs/ subfolder. Saves folder_name into the character metadata so all
+    subsequent operations use the same directory.
+    """
     _init_store()
     char_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
     created = _now_iso()
+    display_name = (name or "Unnamed").strip()
+    folder_name = f"{display_name} -- {char_id}"
+
     c = Character(
         id=char_id,
-        name=(name or "Unnamed").strip(),
+        name=display_name,
+        folder_name=folder_name,
         created_at=created,
         updated_at=created,
         identity_ref=None,
@@ -257,8 +266,13 @@ def _create_character(name: str) -> Tuple[str, str]:
         },
         preview=None,
     )
-    _safe_mkdir(_refs_dir(char_id))
+
+    # create the new character folder and refs subfolder immediately
+    _safe_mkdir(os.path.join(CHAR_ROOT, folder_name))
+    _safe_mkdir(os.path.join(CHAR_ROOT, folder_name, "refs"))
+
     _save_character(c)
+    print(f"[character_library_neo] created character folder: {os.path.join(CHAR_ROOT, folder_name)}")
     return char_id, f"Created character: {c.name} ({c.id})"
 
 def _add_refs(char_id: str, files: List[Any]) -> str:
