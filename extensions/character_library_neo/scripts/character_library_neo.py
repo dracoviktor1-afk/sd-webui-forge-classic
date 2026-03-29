@@ -141,11 +141,33 @@ def _delete_character(char_id: str):
     if os.path.isdir(folder):
         shutil.rmtree(folder, ignore_errors=True)
 
-# normalize incoming character id from Gradio (it may be a list/tuple or a single string)
+# robust normalization for character id values coming from Gradio
 def _normalize_char_id(char_id):
-    if isinstance(char_id, (list, tuple)):
-        return char_id[0] if len(char_id) > 0 else None
-    return char_id
+    # unwrap nested lists/tuples (e.g. [[id]] or [id])
+    while isinstance(char_id, (list, tuple)):
+        if len(char_id) == 0:
+            return None
+        char_id = char_id[0]
+
+    # some Gradio versions may wrap values in dicts; try common keys
+    if isinstance(char_id, dict):
+        for k in ("value", "id", "name"):
+            if k in char_id:
+                return _normalize_char_id(char_id[k])
+        # if dict is like {"0": "<id>"} pick first value
+        vals = list(char_id.values())
+        if vals:
+            return _normalize_char_id(vals[0])
+        return None
+
+    if char_id is None:
+        return None
+
+    # final: convert to string (IDs in our store are strings)
+    try:
+        return str(char_id)
+    except Exception:
+        return None
 
 def _char_dir(char_id: str) -> str:
     cid = _normalize_char_id(char_id)
@@ -206,7 +228,7 @@ def _create_character(name: str) -> Tuple[str, str]:
     return char_id, f"Created character: {c.name} ({c.id})"
 
 def _add_refs(char_id: str, files: List[Any]) -> str:
-    # allow gradio dropdown to pass list/tuple
+    # allow gradio dropdown to pass list/tuple/dict
     cid = _normalize_char_id(char_id)
     if not cid:
         return "Select a character first."
@@ -219,13 +241,27 @@ def _add_refs(char_id: str, files: List[Any]) -> str:
     added = 0
     for f in files:
         src = None
+        # Gradio file inputs commonly come as dicts with 'name' or as TemporaryUploadedFile with .name
         if isinstance(f, str):
             src = f
         elif hasattr(f, "name"):
             src = f.name
-        elif isinstance(f, dict) and "name" in f:
-            src = f["name"]
+        elif isinstance(f, dict):
+            # Some gradio versions produce {"name": "...", "tmp_path": "..."}
+            # prefer "name", then any path-like values
+            if "name" in f and isinstance(f["name"], str):
+                src = f["name"]
+            elif "tmp_path" in f and isinstance(f["tmp_path"], str):
+                src = f["tmp_path"]
+            else:
+                # fallback: try first string value
+                for v in f.values():
+                    if isinstance(v, str) and os.path.exists(v):
+                        src = v
+                        break
+
         if not src or not os.path.exists(src):
+            # skip invalid entries
             continue
 
         ext = os.path.splitext(src)[1].lower()
@@ -233,11 +269,16 @@ def _add_refs(char_id: str, files: List[Any]) -> str:
             continue
 
         dst = os.path.join(rdir, f"{uuid.uuid4().hex}{ext}")
-        shutil.copy(src, dst)
-        added += 1
+        try:
+            shutil.copy(src, dst)
+            added += 1
+        except Exception as exc:
+            print(f"[character_library_neo] failed copying {src} -> {dst}: {exc}")
+            continue
 
     if added == 0:
         return "No valid images were added."
+    # update character updated_at and save
     chars = {c.id: c for c in _list_characters()}
     c = chars.get(cid)
     if c:
