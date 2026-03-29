@@ -46,10 +46,12 @@ def _init_store():
     if not os.path.exists(CHAR_INDEX):
         _write_json(CHAR_INDEX, {"characters": []})
 
+# Character metadata now includes folder_name (the actual directory on disk)
 @dataclass
 class Character:
     id: str
     name: str
+    folder_name: str               # actual directory name under CHAR_ROOT
     created_at: str
     updated_at: str
     identity_ref: Optional[str]
@@ -67,6 +69,7 @@ def _list_characters() -> List[Character]:
             Character(
                 id=c["id"],
                 name=c.get("name", c["id"]),
+                folder_name=c.get("folder_name", f"{c.get('name',c.get('id'))} -- {c['id']}"),
                 created_at=c.get("created_at", ""),
                 updated_at=c.get("updated_at", ""),
                 identity_ref=c.get("identity_ref"),
@@ -97,6 +100,7 @@ def _save_character(updated: Character):
             {
                 "id": c.id,
                 "name": c.name,
+                "folder_name": c.folder_name,
                 "created_at": c.created_at,
                 "updated_at": c.updated_at,
                 "identity_ref": c.identity_ref,
@@ -115,6 +119,7 @@ def _delete_character(char_id: str):
     cid = _normalize_char_id(char_id)
     if not cid:
         return
+    # remove entry from JSON and delete matching folder_name on disk if present
     chars = _list_characters()
     kept = [c for c in chars if c.id != cid]
     _write_json(
@@ -124,6 +129,7 @@ def _delete_character(char_id: str):
                 {
                     "id": c.id,
                     "name": c.name,
+                    "folder_name": c.folder_name,
                     "created_at": c.created_at,
                     "updated_at": c.updated_at,
                     "identity_ref": c.identity_ref,
@@ -136,10 +142,13 @@ def _delete_character(char_id: str):
             ]
         },
     )
-    # remove folder
-    folder = os.path.join(CHAR_ROOT, cid)
-    if os.path.isdir(folder):
-        shutil.rmtree(folder, ignore_errors=True)
+    # remove the character directory (folder_name) if it exists
+    # find the folder_name for the char we deleted (from original list)
+    orig = next((c for c in chars if c.id == cid), None)
+    if orig:
+        folder = os.path.join(CHAR_ROOT, orig.folder_name)
+        if os.path.isdir(folder):
+            shutil.rmtree(folder, ignore_errors=True)
 
 # robust normalization for character id values coming from Gradio
 def _normalize_char_id(char_id):
