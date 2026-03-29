@@ -639,15 +639,20 @@ class CharacterBindingScript(scripts_mod.Script):
         except Exception as e:
             print(f"[character_library_neo] failed to attach character refs: {e}")
 
+# -------------------------
 # Robust, idempotent registration for CharacterBindingScript
-# This block removes any previous faulty entries and registers the script
-# in the descriptor format expected by this fork's modules.scripts.initialize_scripts.
-
+# Replace any previous registration block with this exact code.
+# -------------------------
 from types import SimpleNamespace
 
 def _cleanup_existing_registration():
-    # remove older fallback attributes if present
-    for attr in ("character_library_neo_fallback_script", "character_library_neo_fallback", "character_library_neo_descriptor"):
+    # remove previous fallback attributes if present
+    for attr in (
+        "character_library_neo_fallback_script",
+        "character_library_neo_fallback",
+        "character_library_neo_descriptor",
+        "character_library_neo_descriptor_old",
+    ):
         if hasattr(scripts_mod, attr):
             try:
                 delattr(scripts_mod, attr)
@@ -655,16 +660,22 @@ def _cleanup_existing_registration():
             except Exception:
                 pass
 
-    # clean scripts_data list entries referencing this module or class
+    # clean scripts_data list entries referencing this module or our class
     if hasattr(scripts_mod, "scripts_data") and isinstance(scripts_mod.scripts_data, list):
         before = len(scripts_mod.scripts_data)
-        scripts_mod.scripts_data[:] = [
-            sd for sd in scripts_mod.scripts_data
-            if not (
-                getattr(sd, "module", None) == __name__
-                or getattr(sd, "script_class", None) in (CharacterBindingScript, CharacterBindingScript.__name__)
-            )
-        ]
+        new = []
+        for sd in scripts_mod.scripts_data:
+            try:
+                mod = getattr(sd, "module", None)
+                sc = getattr(sd, "script_class", None)
+                if mod == __name__:
+                    continue
+                if sc in (CharacterBindingScript, CharacterBindingScript.__name__):
+                    continue
+            except Exception:
+                pass
+            new.append(sd)
+        scripts_mod.scripts_data[:] = new
         after = len(scripts_mod.scripts_data)
         if before != after:
             print(f"[character_library_neo] cleaned {before-after} entries from modules.scripts.scripts_data")
@@ -675,18 +686,16 @@ def _cleanup_existing_registration():
         new_list = []
         for item in scripts_mod.scripts_list:
             try:
-                # item may be class, instance, or descriptor — filter anything referencing our class/module
+                # skip direct matches of class, instances, or descriptors pointing to our module
                 if item in (CharacterBindingScript,):
                     continue
-                # if it's an instance of our class, skip it
                 if isinstance(item, CharacterBindingScript):
                     continue
-                # sometimes entries are descriptors in legacy shapes, skip module match
                 if getattr(item, "module", None) == __name__:
                     continue
-                new_list.append(item)
             except Exception:
-                new_list.append(item)
+                pass
+            new_list.append(item)
         scripts_mod.scripts_list[:] = new_list
         after = len(scripts_mod.scripts_list)
         if before != after:
@@ -696,34 +705,39 @@ _cleanup_existing_registration()
 
 _registered = False
 
-# Prepare descriptor object with expected attributes (module, script_class)
-descriptor = SimpleNamespace(module=__name__, script_class=CharacterBindingScript)
+# Build descriptor with common attributes loaders expect
+descriptor = SimpleNamespace(
+    module=__name__,
+    script_class=CharacterBindingScript,
+    path=__file__,
+    filename=os.path.basename(__file__),
+    name=EXTENSION_CANONICAL_NAME,
+)
 
-# Preferred path: append to scripts_data if present
+# Primary: append descriptor to scripts_data if available
 try:
     if hasattr(scripts_mod, "scripts_data") and isinstance(scripts_mod.scripts_data, list):
         scripts_mod.scripts_data.append(descriptor)
         _registered = True
         print("[character_library_neo] registered script descriptor in modules.scripts.scripts_data")
 except Exception as e:
-    print(f"[character_library_neo] failed to append to scripts_data: {e}")
+    print(f"[character_library_neo] failed to append descriptor to scripts_data: {e}")
 
-# Fallback: append the class to scripts_list if scripts_data doesn't exist
+# Fallback: append the class to scripts_list (some forks expect classes here)
 try:
     if not _registered and hasattr(scripts_mod, "scripts_list") and isinstance(scripts_mod.scripts_list, list):
-        # some forks expect classes in scripts_list, so append the class (not an instance)
         scripts_mod.scripts_list.append(CharacterBindingScript)
         _registered = True
         print("[character_library_neo] appended CharacterBindingScript class to modules.scripts.scripts_list")
 except Exception as e:
     print(f"[character_library_neo] failed to append to scripts_list: {e}")
 
-# Last resort: attach descriptor as attribute so loader can pick it up later
+# Last resort: attach descriptor as attribute so it can be discovered later
 if not _registered:
     try:
         setattr(scripts_mod, "character_library_neo_descriptor", descriptor)
-        print("[character_library_neo] installed fallback descriptor on modules.scripts as 'character_library_neo_descriptor'")
         _registered = True
+        print("[character_library_neo] installed fallback descriptor on modules.scripts as 'character_library_neo_descriptor'")
     except Exception as e:
         print(f"[character_library_neo] final fallback registration failed: {e}")
 
