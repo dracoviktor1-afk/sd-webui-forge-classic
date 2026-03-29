@@ -15,9 +15,29 @@ from modules import script_callbacks
 
 EXTENSION_DIR = os.path.dirname(__file__)
 EXTENSION_CANONICAL_NAME = "character_library_neo"
-CHAR_ROOT = os.path.join(data_path, "character_library_neo")
+# Extension folder helpers
+EXTENSION_ROOT = os.path.normpath(os.path.join(EXTENSION_DIR, ".."))  # .../extensions/character_library_neo
+# Store character data inside the extension directory so users find it under extensions/character_library_neo/characters/
+CHAR_ROOT = os.path.join(EXTENSION_ROOT, "characters")
 CHAR_INDEX = os.path.join(CHAR_ROOT, "characters.json")
-TRAIN_SCRIPT = os.path.join(EXTENSION_DIR, "..", "train_lora.py")  # optional training script
+# Optional training script inside the extension root (unchanged)
+TRAIN_SCRIPT = os.path.join(EXTENSION_DIR, "..", "train_lora.py")
+
+# If an unexpected stray folder exists at the repo root (e.g. project_root/character_library_neo),
+# move its contents into the extension data folder to keep things tidy.
+try:
+    # path many installs produced earlier
+    STRAY_AT_ROOT = os.path.normpath(os.path.join(os.path.dirname(EXTENSION_ROOT), "character_library_neo"))
+    if os.path.exists(STRAY_AT_ROOT) and not os.path.exists(CHAR_ROOT):
+        # move the stray folder into the extension folder
+        _safe_mkdir(EXTENSION_ROOT)
+        try:
+            shutil.move(STRAY_AT_ROOT, CHAR_ROOT)
+            print(f"[character_library_neo] migrated stray folder {STRAY_AT_ROOT} -> {CHAR_ROOT}")
+        except Exception as e:
+            print(f"[character_library_neo] failed to migrate stray folder: {e}")
+except Exception as e:
+    print(f"[character_library_neo] stray-folder migration check failed: {e}")
 
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
