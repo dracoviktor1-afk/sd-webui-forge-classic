@@ -11,33 +11,16 @@ import gradio as gr
 
 from modules import script_callbacks, shared, scripts, ui, processing
 from modules.paths import data_path
-from modules import script_callbacks
+
+# Debug import
+print("[character_library_neo] importing character_library_neo.py")
 
 EXTENSION_DIR = os.path.dirname(__file__)
-EXTENSION_CANONICAL_NAME = "character_library_neo"
-# Extension folder helpers
-EXTENSION_ROOT = os.path.normpath(os.path.join(EXTENSION_DIR, ".."))  # .../extensions/character_library_neo
-# Store character data inside the extension directory so users find it under extensions/character_library_neo/characters/
+EXTENSION_ROOT = os.path.normpath(os.path.join(EXTENSION_DIR, ".."))  # <repo>/extensions/character_library_neo
+# Store character data inside the extension directory
 CHAR_ROOT = os.path.join(EXTENSION_ROOT, "characters")
 CHAR_INDEX = os.path.join(CHAR_ROOT, "characters.json")
-# Optional training script inside the extension root (unchanged)
-TRAIN_SCRIPT = os.path.join(EXTENSION_DIR, "..", "train_lora.py")
-
-# If an unexpected stray folder exists at the repo root (e.g. project_root/character_library_neo),
-# move its contents into the extension data folder to keep things tidy.
-try:
-    # path many installs produced earlier
-    STRAY_AT_ROOT = os.path.normpath(os.path.join(os.path.dirname(EXTENSION_ROOT), "character_library_neo"))
-    if os.path.exists(STRAY_AT_ROOT) and not os.path.exists(CHAR_ROOT):
-        # move the stray folder into the extension folder
-        _safe_mkdir(EXTENSION_ROOT)
-        try:
-            shutil.move(STRAY_AT_ROOT, CHAR_ROOT)
-            print(f"[character_library_neo] migrated stray folder {STRAY_AT_ROOT} -> {CHAR_ROOT}")
-        except Exception as e:
-            print(f"[character_library_neo] failed to migrate stray folder: {e}")
-except Exception as e:
-    print(f"[character_library_neo] stray-folder migration check failed: {e}")
+TRAIN_SCRIPT = os.path.join(EXTENSION_DIR, "..", "train_lora.py")  # optional training script
 
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -61,6 +44,18 @@ def _write_json(path: str, payload):
         json.dump(payload, f, indent=2, ensure_ascii=False)
     os.replace(tmp, path)
 
+# If a stray folder exists at project root named "character_library_neo", attempt migration (once)
+try:
+    STRAY_AT_ROOT = os.path.normpath(os.path.join(os.path.dirname(EXTENSION_ROOT), "character_library_neo"))
+    if os.path.exists(STRAY_AT_ROOT) and not os.path.exists(CHAR_ROOT):
+        try:
+            shutil.move(STRAY_AT_ROOT, CHAR_ROOT)
+            print(f"[character_library_neo] migrated stray folder {STRAY_AT_ROOT} -> {CHAR_ROOT}")
+        except Exception as e:
+            print(f"[character_library_neo] failed to migrate stray folder: {e}")
+except Exception as e:
+    print(f"[character_library_neo] stray-folder migration check failed: {e}")
+
 def _init_store():
     _safe_mkdir(CHAR_ROOT)
     if not os.path.exists(CHAR_INDEX):
@@ -79,6 +74,32 @@ class Character:
     notes: str
     defaults: Dict[str, Any]
     preview: Optional[str]
+
+# robust normalization for character id values coming from Gradio
+def _normalize_char_id(char_id):
+    # unwrap nested lists/tuples (e.g. [[id]] or [id])
+    while isinstance(char_id, (list, tuple)):
+        if len(char_id) == 0:
+            return None
+        char_id = char_id[0]
+
+    # some Gradio versions may wrap values in dicts; try common keys
+    if isinstance(char_id, dict):
+        for k in ("value", "id", "name"):
+            if k in char_id:
+                return _normalize_char_id(char_id[k])
+        vals = list(char_id.values())
+        if vals:
+            return _normalize_char_id(vals[0])
+        return None
+
+    if char_id is None:
+        return None
+
+    try:
+        return str(char_id)
+    except Exception:
+        return None
 
 def _list_characters() -> List[Character]:
     _init_store()
@@ -139,7 +160,6 @@ def _delete_character(char_id: str):
     cid = _normalize_char_id(char_id)
     if not cid:
         return
-    # remove entry from JSON and delete matching folder_name on disk if present
     chars = _list_characters()
     kept = [c for c in chars if c.id != cid]
     _write_json(
@@ -163,40 +183,11 @@ def _delete_character(char_id: str):
         },
     )
     # remove the character directory (folder_name) if it exists
-    # find the folder_name for the char we deleted (from original list)
     orig = next((c for c in chars if c.id == cid), None)
     if orig:
         folder = os.path.join(CHAR_ROOT, orig.folder_name)
         if os.path.isdir(folder):
             shutil.rmtree(folder, ignore_errors=True)
-
-# robust normalization for character id values coming from Gradio
-def _normalize_char_id(char_id):
-    # unwrap nested lists/tuples (e.g. [[id]] or [id])
-    while isinstance(char_id, (list, tuple)):
-        if len(char_id) == 0:
-            return None
-        char_id = char_id[0]
-
-    # some Gradio versions may wrap values in dicts; try common keys
-    if isinstance(char_id, dict):
-        for k in ("value", "id", "name"):
-            if k in char_id:
-                return _normalize_char_id(char_id[k])
-        # if dict is like {"0": "<id>"} pick first value
-        vals = list(char_id.values())
-        if vals:
-            return _normalize_char_id(vals[0])
-        return None
-
-    if char_id is None:
-        return None
-
-    # final: convert to string (IDs in our store are strings)
-    try:
-        return str(char_id)
-    except Exception:
-        return None
 
 def _char_dir(char_id: str) -> str:
     """
@@ -209,7 +200,6 @@ def _char_dir(char_id: str) -> str:
     c = next((cc for cc in _list_characters() if cc.id == cid), None)
     if c and getattr(c, "folder_name", None):
         return os.path.join(CHAR_ROOT, c.folder_name)
-    # fallback: use id-only folder (legacy)
     return os.path.join(CHAR_ROOT, str(cid))
 
 def _refs_dir(char_id: str) -> str:
@@ -278,6 +268,7 @@ def _create_character(name: str) -> Tuple[str, str]:
 def _add_refs(char_id: str, files: List[Any]) -> str:
     # allow gradio dropdown to pass list/tuple/dict
     cid = _normalize_char_id(char_id)
+    print(f"[character_library_neo] _add_refs called raw char_id={repr(char_id)} -> cid={repr(cid)} files={repr(files)}")
     if not cid:
         return "Select a character first."
     if not files:
@@ -289,31 +280,27 @@ def _add_refs(char_id: str, files: List[Any]) -> str:
     added = 0
     for f in files:
         src = None
-        # Gradio file inputs commonly come as dicts with 'name' or as TemporaryUploadedFile with .name
+        # Gradio file inputs commonly come as dicts with 'name' or TemporaryUploadedFile with .name
         if isinstance(f, str):
             src = f
         elif hasattr(f, "name"):
             src = f.name
         elif isinstance(f, dict):
-            # Some gradio versions produce {"name": "...", "tmp_path": "..."}
-            # prefer "name", then any path-like values
             if "name" in f and isinstance(f["name"], str):
                 src = f["name"]
             elif "tmp_path" in f and isinstance(f["tmp_path"], str):
                 src = f["tmp_path"]
             else:
-                # fallback: try first string value
                 for v in f.values():
                     if isinstance(v, str) and os.path.exists(v):
                         src = v
                         break
 
         if not src or not os.path.exists(src):
-            # skip invalid entries
             continue
 
         ext = os.path.splitext(src)[1].lower()
-        if ext not in [".png", ".jpg", ".jpeg", ".webp"]:
+        if ext not in (".png", ".jpg", ".jpeg", ".webp"):
             continue
 
         dst = os.path.join(rdir, f"{uuid.uuid4().hex}{ext}")
@@ -338,7 +325,6 @@ def _make_preview(char_id: str) -> Optional[str]:
     cid = _normalize_char_id(char_id)
     if not cid:
         return None
-    # Simple preview: pick identity_ref or first style ref and return absolute path.
     c = next((c for c in _list_characters() if c.id == cid), None)
     if not c:
         return None
@@ -470,14 +456,12 @@ def _spawn_train_job(char_id: str, steps: int = 200, lr: float = 1e-4) -> str:
         "--lr", str(lr),
     ]
     try:
-        # spawn background process (non-blocking)
         subprocess.Popen(args, cwd=EXTENSION_DIR)
         return "Training started in background (check terminal)."
     except Exception as e:
         return f"Failed to start training: {e}"
 
-# ----- UI and integration hooks -----
-
+# ----- UI tab -----
 def on_ui_tabs():
     _init_store()
 
@@ -526,7 +510,6 @@ def on_ui_tabs():
 
         log_out = gr.Textbox(label="Status output", lines=2, interactive=False)
 
-        # Load / refresh handlers
         def _refresh():
             choices, msg = _ui_refresh_character_list()
             return choices, msg
@@ -623,12 +606,8 @@ def on_ui_tabs():
 script_callbacks.on_ui_tabs(on_ui_tabs)
 
 # -------------------------
-# Add small controls into the generation UI area so users can choose "Use Character"
-# We'll register a Script that returns UI components for insertion into txt2img/img2img panels.
-# This approach mirrors other Forge builtin extensions which return small UI controls and
-# provides a hook process_before_every_sampling where we inject preprocessors.
+# Generation UI script binding
 # -------------------------
-
 from modules import scripts as scripts_mod
 
 class CharacterBindingScript(scripts_mod.Script):
@@ -642,29 +621,19 @@ class CharacterBindingScript(scripts_mod.Script):
             use_character = gr.Dropdown(label="Use Character", choices=[(f"{c.name} — {c.id}", c.id) for c in _list_characters()], value=None)
             apply_button = gr.Button(value="Apply Character", variant="primary")
             lock_toggle = gr.Checkbox(label="Sticky (keep across generations)", value=False)
-        # These comps will be attached into the generation UI automatically by Forge
         return use_character, apply_button, lock_toggle
 
     def process_before_every_sampling(self, p, use_character, apply_button, lock_toggle, **kwargs):
-        # Called before sampling. We'll attach IP-Adapter / InstantID conditioning if possible.
-        char_id = use_character
+        char_id = _normalize_char_id(use_character)
         if not char_id:
             return
-
         c = next((cc for cc in _list_characters() if cc.id == char_id), None)
         if not c:
             return
-
-        # Attempt to apply InstantID/IP-Adapter conditioning by constructing conditioning dicts
         try:
-            # 1) Collect absolute paths to images
-            refs_abs = [ _ref_abs_path(char_id, r) for r in (c.style_refs or [])]
+            refs_abs = [_ref_abs_path(char_id, r) for r in (c.style_refs or [])]
             identity_abs = _ref_abs_path(char_id, c.identity_ref) if c.identity_ref else None
-
-            # 2) Add them to process.extra_generation_params so built-in preprocessors can see them.
-            # Many forge preprocessors look for fields like 'reference_images' or units; add both.
-            # This is a conservative approach: we don't mutate internal UNET structures directly.
-            egp = getattr(p, "extra_generation_params", {})
+            egp = getattr(p, "extra_generation_params", {}) or {}
             egp["character_library_ref_images"] = refs_abs
             egp["character_library_identity_image"] = identity_abs
             egp["character_library_identity_strength"] = float(c.defaults.get("identity_strength", 0.85))
@@ -672,88 +641,50 @@ class CharacterBindingScript(scripts_mod.Script):
             egp["character_library_enable_identity"] = bool(c.defaults.get("enable_identity", True))
             egp["character_library_enable_style"] = bool(c.defaults.get("enable_style", True))
             p.extra_generation_params = egp
-
-            # Many forge-preprocessors use presence of these keys to pick them up.
-            # If you later enable the "auto-inject" path (LoRA training + auto-load), we'll replace this.
         except Exception as e:
             print(f"[character_library_neo] failed to attach character refs: {e}")
 
-# -------------------------
-# Robust, idempotent registration for CharacterBindingScript
-# Replace any previous registration block with this exact code.
-# -------------------------
+# Robust registration: create descriptor object expected by this webui fork
 from types import SimpleNamespace
 
 def _cleanup_existing_registration():
-    # remove previous fallback attributes if present
     for attr in (
         "character_library_neo_fallback_script",
         "character_library_neo_fallback",
         "character_library_neo_descriptor",
         "character_library_neo_descriptor_old",
+        "character_library_neo_descriptor_installed",
     ):
         if hasattr(scripts_mod, attr):
             try:
                 delattr(scripts_mod, attr)
-                print(f"[character_library_neo] removed previous attribute on modules.scripts: {attr}")
             except Exception:
                 pass
 
-    # clean scripts_data list entries referencing this module or our class
     if hasattr(scripts_mod, "scripts_data") and isinstance(scripts_mod.scripts_data, list):
-        before = len(scripts_mod.scripts_data)
-        new = []
-        for sd in scripts_mod.scripts_data:
-            try:
-                mod = getattr(sd, "module", None)
-                sc = getattr(sd, "script_class", None)
-                if mod == __name__:
-                    continue
-                if sc in (CharacterBindingScript, CharacterBindingScript.__name__):
-                    continue
-            except Exception:
-                pass
-            new.append(sd)
-        scripts_mod.scripts_data[:] = new
-        after = len(scripts_mod.scripts_data)
-        if before != after:
-            print(f"[character_library_neo] cleaned {before-after} entries from modules.scripts.scripts_data")
+        scripts_mod.scripts_data[:] = [
+            sd for sd in scripts_mod.scripts_data
+            if not (getattr(sd, "module", None) == __name__)
+        ]
 
-    # clean scripts_list entries referencing this module/class/instance
     if hasattr(scripts_mod, "scripts_list") and isinstance(scripts_mod.scripts_list, list):
-        before = len(scripts_mod.scripts_list)
-        new_list = []
-        for item in scripts_mod.scripts_list:
-            try:
-                # skip direct matches of class, instances, or descriptors pointing to our module
-                if item in (CharacterBindingScript,):
-                    continue
-                if isinstance(item, CharacterBindingScript):
-                    continue
-                if getattr(item, "module", None) == __name__:
-                    continue
-            except Exception:
-                pass
-            new_list.append(item)
-        scripts_mod.scripts_list[:] = new_list
-        after = len(scripts_mod.scripts_list)
-        if before != after:
-            print(f"[character_library_neo] cleaned {before-after} entries from modules.scripts.scripts_list")
+        scripts_mod.scripts_list[:] = [
+            item for item in scripts_mod.scripts_list
+            if not (item is CharacterBindingScript or getattr(item, "module", None) == __name__)
+        ]
 
 _cleanup_existing_registration()
 
 _registered = False
 
-# Build descriptor with common attributes loaders expect
 descriptor = SimpleNamespace(
     module=__name__,
     script_class=CharacterBindingScript,
     path=__file__,
     filename=os.path.basename(__file__),
-    name=EXTENSION_CANONICAL_NAME,
+    name="character_library_neo",
 )
 
-# Primary: append descriptor to scripts_data if available
 try:
     if hasattr(scripts_mod, "scripts_data") and isinstance(scripts_mod.scripts_data, list):
         scripts_mod.scripts_data.append(descriptor)
@@ -762,7 +693,6 @@ try:
 except Exception as e:
     print(f"[character_library_neo] failed to append descriptor to scripts_data: {e}")
 
-# Fallback: append the class to scripts_list (some forks expect classes here)
 try:
     if not _registered and hasattr(scripts_mod, "scripts_list") and isinstance(scripts_mod.scripts_list, list):
         scripts_mod.scripts_list.append(CharacterBindingScript)
@@ -771,7 +701,6 @@ try:
 except Exception as e:
     print(f"[character_library_neo] failed to append to scripts_list: {e}")
 
-# Last resort: attach descriptor as attribute so it can be discovered later
 if not _registered:
     try:
         setattr(scripts_mod, "character_library_neo_descriptor", descriptor)
